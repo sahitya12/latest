@@ -1,0 +1,20 @@
+$cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=Local Code Signing" -CertStoreLocation Cert:\CurrentUser\My
+$src = "Cert:\CurrentUser\My\$($cert.Thumbprint)"
+$dst = "Cert:\CurrentUser\TrustedPublisher"
+Copy-Item $src $dst
+Set-AuthenticodeSignature -FilePath .\KeyVaultScan.ps1 -Certificate $cert
+
+
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\Scan-KV-Secrets-Local-SPN-Robust.ps1
+
+
+# PowerShell 7 recommended
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\Scan-KV-Secrets-FromXlsx.ps1
+
+
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\Scan-KV-Secrets-FromXlsx.ps1
+
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+
+

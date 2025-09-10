@@ -1,0 +1,40 @@
+trigger: none  # run manually; add branches if you want CI
+
+# Choose custodian at run time. Empty string means "not provided".
+parameters:
+- name: adh_group
+  displayName: Custodian (adh_group)
+  type: string
+  default: ''
+
+stages:
+# 0) Validate input so we don't run with an empty custodian
+- stage: Validate
+  displayName: Validate parameters
+  jobs:
+  - job: ensure_custodian
+    displayName: Ensure adh_group provided
+    pool:
+      vmImage: windows-latest
+    steps:
+    - powershell: |
+        if ([string]::IsNullOrWhiteSpace('${{ parameters.adh_group }}')) {
+          Write-Error "Parameter 'adh_group' is required. Re-run the pipeline and provide a value (e.g., CSM)."
+        } else {
+          Write-Host "adh_group='${{ parameters.adh_group }}' ✓"
+        }
+      displayName: Validate 'adh_group'
+
+# 1) RG Permissions (by custodian)
+- template: stages/rg-permissions.stage.yml
+  parameters:
+    adh_group: ${{ parameters.adh_group }}
+    prodCsvPath: '$(Build.SourcesDirectory)/sanitychecks/inputs/prod_permissions.csv'
+    nonProdCsvPath: '$(Build.SourcesDirectory)/sanitychecks/inputs/nonprod_permissions.csv'
+    variableGroup: 'modernization_tfstate_backend_details'
+
+# 2) RG Tags (by custodian)
+- template: stages/rg-tags.stage.yml
+  parameters:
+    adh_group: ${{ parameters.adh_group }}
+    variableGroup: 'modernization_tfstate_backend_details'

@@ -1,0 +1,58 @@
+# Output CSV file
+$outputFile = "route_table_report.csv"
+"SubscriptionName,SubscriptionId,RouteTableName,ResourceGroup,RouteName,AddressPrefix,NextHopType,NextHopIpAddress" | Out-File -FilePath $outputFile -Encoding utf8
+
+# Get all subscriptions
+$subscriptions = az account list --query "[].{name:name, id:id}" -o tsv
+
+foreach ($sub in $subscriptions) {
+    $parts = $sub -split "`t"
+    $subName = $parts[0]
+    $subId = $parts[1]
+
+    Write-Output "`n🔍 Scanning subscription: $subName ($subId)"
+    az account set --subscription $subId | Out-Null
+
+    # Get all route tables in this subscription
+    $routeTables = az network route-table list --query "[].{name:name, rg:resourceGroup}" -o tsv
+
+    foreach ($rt in $routeTables) {
+        $rtParts = $rt -split "`t"
+        $rtName = $rtParts[0]
+        $rgName = $rtParts[1]
+
+        # Get routes in the route table
+        $routesJson = az network route-table route list `
+            --route-table-name $rtName `
+            --resource-group $rgName `
+            -o json
+
+        if ($routesJson) {
+            $routes = $routesJson | ConvertFrom-Json
+
+            foreach ($route in $routes) {
+                $routeName = $route.name
+                $addressPrefix = $route.addressPrefix
+                $nextHopType = $route.nextHopType
+                $nextHopIp = if ($null -ne $route.nextHopIpAddress) { $route.nextHopIpAddress } else { "N/A" }
+
+                # Append to CSV
+                "$subName,$subId,$rtName,$rgName,$routeName,$addressPrefix,$nextHopType,$nextHopIp" | Out-File -Append -FilePath $outputFile
+            }
+        }
+    }
+}
+
+Write-Output "`n✅ Route table report generated: $outputFile"
+
+
+
+
+
+
+
+
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\export-route-tables.ps1
+
+

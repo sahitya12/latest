@@ -1,0 +1,44 @@
+parameters:
+  variableGroup: 'modernization_tfstate_backend_details'  # contains tenant_id, backend_client_id, backend_client_secret, teamsWebhook
+  displayName: 'Run PowerShell'
+  scriptPath: ''            # e.g. sanitychecks/scripts/Scan-RG-Tags.ps1
+  workingDir: ''            # optional
+  arguments: ''             # pass-through to the script
+  artifactName: 'scan-out'  # artifact name
+  publishPath: '$(Build.ArtifactStagingDirectory)/scan-out'
+  ensureAz: true
+
+jobs:
+- job: run_script
+  displayName: ${{ parameters.displayName }}
+  pool:
+    vmImage: 'windows-latest'
+
+  variables:
+  - group: ${{ parameters.variableGroup }}
+
+  steps:
+  - ${{ if eq(parameters.ensureAz, true) }}:
+    - task: PowerShell@2
+      displayName: Ensure Az modules
+      inputs:
+        targetType: inline
+        script: |
+          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+          if (-not (Get-Module -ListAvailable -Name Az.Accounts))  { Install-Module Az.Accounts  -Scope CurrentUser -Force }
+          if (-not (Get-Module -ListAvailable -Name Az.Resources)) { Install-Module Az.Resources -Scope CurrentUser -Force }
+
+  - task: PowerShell@2
+    displayName: Run ${{ parameters.scriptPath }}
+    inputs:
+      targetType: filePath
+      filePath: '$(Build.SourcesDirectory)/${{ parameters.scriptPath }}'
+      workingDirectory: ${{ parameters.workingDir }}
+      arguments: ${{ parameters.arguments }}
+      pwsh: true
+
+  - task: PublishBuildArtifacts@1
+    displayName: Publish artifacts (${{ parameters.artifactName }})
+    inputs:
+      PathtoPublish: ${{ parameters.publishPath }}
+      ArtifactName: ${{ parameters.artifactName }}
