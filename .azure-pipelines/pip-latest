@@ -1,0 +1,83 @@
+# Modernization_Terraform/sanitychecks/.azure-pipelines/pipeline.yml
+trigger: none
+
+# Schedule: run on the 1st of every month at 02:00 UTC (≈07:30 IST)
+schedules:
+- cron: "0 2 1 * *"
+  displayName: Monthly – 1st @ 02:00 UTC
+  branches:
+    include: [ main ]
+  always: true
+
+parameters:
+- name: run_mode
+  type: string
+  default: AllADH         # monthly default: scan all ADH
+  values: [ ByCustodian, AllADH ]
+
+- name: adh_group
+  type: string
+  default: ""             # e.g., "CSM" for single custodian
+
+- name: adh_groups
+  type: string
+  default: ""             # e.g., "CSM,NHH,MDH" for multi-custodian
+
+stages:
+# --- RG Permissions ---
+- template: stages/rg-permissions.stage.yml
+  parameters:
+    run_mode: ${{ parameters.run_mode }}
+    adh_group: ${{ parameters.adh_group }}
+    adh_groups: ${{ parameters.adh_groups }}
+    prodCsvPath: '$(Build.SourcesDirectory)/sanitychecks/inputs/prod_permissions.csv'
+    nonProdCsvPath: '$(Build.SourcesDirectory)/sanitychecks/inputs/nonprod_permissions.csv'
+    variableGroup: 'modernization_tfstate_backend_details'
+    outDir: '$(Build.ArtifactStagingDirectory)/rg-perms'
+    branchName: '$(Build.SourceBranchName)'
+    # teamsWebhookVar: '$(teams_webhook)'   # (COMMENTED – use Power Automate instead)
+
+# --- RG Tags ---
+- template: stages/rg-tags.stage.yml
+  parameters:
+    run_mode: ${{ parameters.run_mode }}
+    adh_group: ${{ parameters.adh_group }}
+    adh_groups: ${{ parameters.adh_groups }}
+    variableGroup: 'modernization_tfstate_backend_details'
+    outDir: '$(Build.ArtifactStagingDirectory)/rg-tags'
+    branchName: '$(Build.SourceBranchName)'
+    # teamsWebhookVar: '$(teams_webhook)'   # (COMMENTED)
+
+# --- KV Secrets ---
+- template: stages/kv-secrets.stage.yml
+  parameters:
+    run_mode: ${{ parameters.run_mode }}
+    adh_group: ${{ parameters.adh_group }}
+    adh_groups: ${{ parameters.adh_groups }}
+    secretsCsvPath: '$(Build.SourcesDirectory)/sanitychecks/inputs/kvsecretsscan.csv'
+    variableGroup: 'modernization_tfstate_backend_details'
+    outDir: '$(Build.ArtifactStagingDirectory)/kv-secrets'
+    branchName: '$(Build.SourceBranchName)'
+    # teamsWebhookVar: '$(teams_webhook)'   # (COMMENTED)
+
+# --- KV Permissions ---
+- template: stages/kv-permissions.stage.yml
+  parameters:
+    run_mode: ${{ parameters.run_mode }}
+    adh_group: ${{ parameters.adh_group }}
+    adh_groups: ${{ parameters.adh_groups }}
+    variableGroup: 'modernization_tfstate_backend_details'
+    outDir: '$(Build.ArtifactStagingDirectory)/kv-perms'
+    branchName: '$(Build.SourceBranchName)'
+    # teamsWebhookVar: '$(teams_webhook)'   # (COMMENTED)
+
+# --- KV Firewall/Networks ---
+- template: stages/kv-firewall.stage.yml
+  parameters:
+    run_mode: ${{ parameters.run_mode }}
+    adh_group: ${{ parameters.adh_group }}
+    adh_groups: ${{ parameters.adh_groups }}
+    variableGroup: 'modernization_tfstate_backend_details'
+    outDir: '$(Build.ArtifactStagingDirectory)/kv-firewall'
+    branchName: '$(Build.SourceBranchName)'
+    # teamsWebhookVar: '$(teams_webhook)'   # (COMMENTED)
