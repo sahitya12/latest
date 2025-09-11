@@ -2,13 +2,14 @@ parameters:
   run_mode: 'ByCustodian'
   adh_group: ''
   adh_groups: ''
+  adh_subscription_type: ''
   prodCsvPath: ''
   nonProdCsvPath: ''
   variableGroup: 'modernization_tfstate_backend_details'
   outDir: '$(Build.ArtifactStagingDirectory)/rg-perms'
   branchName: ''
   poolType: 'hosted'
-  selfHostedPool: 'SelfHosted-Win'
+  selfHostedPoolName: ''
 
 stages:
 - ${{ if eq(parameters.run_mode, 'ByCustodian') }}:
@@ -31,7 +32,9 @@ stages:
         artifactName: "rg-perms"
         publishPath: "$(outDir)"
         poolType: ${{ parameters.poolType }}
-        selfHostedPool: ${{ parameters.selfHostedPool }}
+        selfHostedPoolName: ${{ parameters.selfHostedPoolName }}
+        adh_group: ${{ parameters.adh_group }}
+        adh_subscription_type: ${{ parameters.adh_subscription_type }}
 
 - ${{ if ne(parameters.run_mode, 'ByCustodian') }}:
   - stage: RG_Permissions_AllADH
@@ -52,4 +55,6 @@ stages:
         artifactName: "rg-perms-ALLADH"
         publishPath: "$(outDir)"
         poolType: ${{ parameters.poolType }}
-        selfHostedPool: ${{ parameters.selfHostedPool }}
+        selfHostedPoolName: ${{ parameters.selfHostedPoolName }}
+        adh_group: ''
+        adh_subscription_type: ${{ parameters.adh_subscription_type }}
