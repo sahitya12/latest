@@ -1,16 +1,16 @@
-# Modernization_Terraform/sanitychecks/.azure-pipelines/pipeline.yml
 trigger: none
 
-# Optional monthly schedule (1st @ 02:00 UTC)
+# Optional schedule (1st day @ 02:00 UTC on main)
 schedules:
 - cron: "0 2 1 * *"
   displayName: Monthly – 1st @ 02:00 UTC
-  branches: { include: [ main ] }
+  branches:
+    include:
+    - main
   always: true
 
 # ---------------- PARAMETERS (release-time variables) ----------------
 parameters:
-# WHAT to scan
 - name: run_mode
   type: string
   default: ByCustodian
@@ -26,7 +26,7 @@ parameters:
   type: object
   default: []
 
-# Lowercase only, as requested
+# Lowercase only
 - name: adh_subscription_type
   type: string
   default: prd
@@ -44,14 +44,12 @@ parameters:
   default: self
   values: [ hosted, self ]
 
-# Optional: pass an exact self-hosted Agent Pool name to use instead of the computed <adh_group>_<adh_subscription_type>
-# Example: "SanityChecks-Runner02"
+# Optional: exact self-hosted Agent Pool name to use instead of computed <adh_group>_<adh_subscription_type>
 - name: CustomSelfHostedPool
   type: string
   default: ""
-  # description is implicit in the name; pass your custom pool name or leave blank to use computed pool
 
-# Common input paths (in repo)
+# Paths to input CSVs (in repo)
 - name: prodCsvPath
   type: string
   default: '$(Build.SourcesDirectory)/sanitychecks/inputs/prod_permissions.csv'
@@ -67,11 +65,11 @@ variables:
 # (A) Single-custodian self-hosted pool name
 - name: selfHostedPoolSingle
   value: ''
-# 1) If user provided CustomSelfHostedPool, use that
+# Use CustomSelfHostedPool if provided
 - ${{ if ne(parameters.CustomSelfHostedPool, '') }}:
   - name: selfHostedPoolSingle
     value: ${{ parameters.CustomSelfHostedPool }}
-# 2) Else, if adh_group provided, build "<adh_group>_<adh_subscription_type>"
+# Else if adh_group provided: "<adh_group>_<adh_subscription_type>"
 - ${{ if and(eq(variables.selfHostedPoolSingle, ''), ne(parameters.adh_group, '')) }}:
   - name: selfHostedPoolSingle
     value: ${{ format('{0}_{1}', parameters.adh_group, parameters.adh_subscription_type) }}
@@ -95,18 +93,19 @@ variables:
   - name: selfHostedPoolForList
     value: ${{ format('{0}_{1}', variables.firstCustodian, parameters.adh_subscription_type) }}
 
-# ---------------- VALIDATION (fail-fast so you don’t waste time) ----------------
+# ---------------- VALIDATION (fail-fast) ----------------
 stages:
 - stage: Validate
   displayName: Validate parameters
-  pool: { vmImage: 'windows-latest' }
+  pool:
+    vmImage: 'windows-latest'
   jobs:
   - job: check
     steps:
     - powershell: |
         Write-Host "run_mode               = '${{ parameters.run_mode }}'"
         Write-Host "adh_group              = '${{ parameters.adh_group }}'"
-        Write-Host "adh_groups_list        = $(${{ parameters.adh_groups_list }} | ConvertTo-Json -Compress)"
+        Write-Host "adh_groups_list length = ${{ length(parameters.adh_groups_list) }}"
         Write-Host "adh_subscription_type  = '${{ parameters.adh_subscription_type }}'"
         Write-Host "poolType               = '${{ parameters.poolType }}'"
         Write-Host "list_agent_provider    = '${{ parameters.list_agent_provider }}'"
@@ -140,10 +139,9 @@ stages:
             Write-Error "AllADH with poolType=self requires CustomSelfHostedPool to be provided (exact self-hosted pool name)."
           }
         }
-
       displayName: Fail-fast checks
 
-# -------------------------- SINGLE CUSTODIAN --------------------------
+# --------------------------- SINGLE CUSTODIAN ---------------------------
 - ${{ if and(eq(parameters.run_mode, 'ByCustodian'), eq(length(parameters.adh_groups_list), 0)) }}:
   - template: stages/rg-permissions.stage.yml
     parameters:
@@ -208,9 +206,11 @@ stages:
   - stage: MultiCustodian_Serial
     displayName: "Sanity checks (multi-custodian serial)"
     ${{ if eq(parameters.list_agent_provider, 'hosted') }}:
-      pool: { vmImage: 'windows-latest' }
+      pool:
+        vmImage: 'windows-latest'
     ${{ if ne(parameters.list_agent_provider, 'hosted') }}:
-      pool: { name: ${{ variables.selfHostedPoolForList }} }
+      pool:
+        name: ${{ variables.selfHostedPoolForList }}
     variables:
     - group: modernization_tfstate_backend_details
     jobs:
@@ -297,19 +297,29 @@ stages:
 
       - task: PublishBuildArtifacts@1
         displayName: Publish rg-perms
-        inputs: { PathtoPublish: '$(Build.ArtifactStagingDirectory)/rg-perms', ArtifactName: 'rg-perms' }
+        inputs:
+          PathtoPublish: '$(Build.ArtifactStagingDirectory)/rg-perms'
+          ArtifactName: 'rg-perms'
       - task: PublishBuildArtifacts@1
         displayName: Publish rg-tags
-        inputs: { PathtoPublish: '$(Build.ArtifactStagingDirectory)/rg-tags', ArtifactName: 'rg-tags' }
+        inputs:
+          PathtoPublish: '$(Build.ArtifactStagingDirectory)/rg-tags'
+          ArtifactName: 'rg-tags'
       - task: PublishBuildArtifacts@1
         displayName: Publish kv-secrets
-        inputs: { PathtoPublish: '$(Build.ArtifactStagingDirectory)/kv-secrets', ArtifactName: 'kv-secrets' }
+        inputs:
+          PathtoPublish: '$(Build.ArtifactStagingDirectory)/kv-secrets'
+          ArtifactName: 'kv-secrets'
       - task: PublishBuildArtifacts@1
         displayName: Publish kv-perms
-        inputs: { PathtoPublish: '$(Build.ArtifactStagingDirectory)/kv-perms', ArtifactName: 'kv-perms' }
+        inputs:
+          PathtoPublish: '$(Build.ArtifactStagingDirectory)/kv-perms'
+          ArtifactName: 'kv-perms'
       - task: PublishBuildArtifacts@1
         displayName: Publish kv-firewall
-        inputs: { PathtoPublish: '$(Build.ArtifactStagingDirectory)/kv-firewall', ArtifactName: 'kv-firewall' }
+        inputs:
+          PathtoPublish: '$(Build.ArtifactStagingDirectory)/kv-firewall'
+          ArtifactName: 'kv-firewall'
 
 # ----------------------------- ALL ADH -----------------------------
 - ${{ if eq(parameters.run_mode, 'AllADH') }}:
