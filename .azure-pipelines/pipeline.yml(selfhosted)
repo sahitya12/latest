@@ -25,7 +25,7 @@ parameters:
   type: object
   default: []
 
-# Lowercase only, as requested
+# Lowercase only
 - name: adh_subscription_type
   type: string
   default: prd
@@ -43,11 +43,6 @@ parameters:
   default: self
   values: [ hosted, self ]
 
-# Optional: the Self-hosted Agent POOL name (not agent name). Example: "SanityChecksPool"
-- name: selfHostedPoolName
-  type: string
-  default: ""
-
 # Input CSVs in repo
 - name: prodCsvPath
   type: string
@@ -61,14 +56,13 @@ parameters:
 
 # ---------------- COMPILE-TIME VARIABLES ----------------
 variables:
-# firstCustodian for list runs
 - name: firstCustodian
   value: ''
 - ${{ if gt(length(parameters.adh_groups_list), 0) }}:
   - name: firstCustodian
     value: ${{ parameters.adh_groups_list[0] }}
 
-# ---------------- VALIDATION (warn-only) ----------------
+# ---------------- VALIDATION (soft) ----------------
 stages:
 - stage: Validate
   displayName: Validate parameters
@@ -84,16 +78,7 @@ stages:
         Write-Host "adh_subscription_type  = '${{ parameters.adh_subscription_type }}'"
         Write-Host "poolType               = '${{ parameters.poolType }}'"
         Write-Host "list_agent_provider    = '${{ parameters.list_agent_provider }}'"
-        Write-Host "selfHostedPoolName     = '${{ parameters.selfHostedPoolName }}'"
-
-        # Gentle warnings instead of hard-fail:
-        if ('${{ parameters.poolType }}' -eq 'self' -and [string]::IsNullOrWhiteSpace('${{ parameters.selfHostedPoolName }}')) {
-          Write-Warning "poolType=self but selfHostedPoolName is empty. You must provide a POOL name (not agent) to run on self-hosted."
-        }
-        if ('${{ parameters.run_mode }}' -eq 'AllADH' -and '${{ parameters.poolType }}' -eq 'self' -and [string]::IsNullOrWhiteSpace('${{ parameters.selfHostedPoolName }}')) {
-          Write-Warning "AllADH + self-hosted requires 'selfHostedPoolName' (POOL)."
-        }
-      displayName: Parameter echo & soft checks
+      displayName: Parameter echo
 
 # --------------------------- SINGLE CUSTODIAN ---------------------------
 - ${{ if and(eq(parameters.run_mode, 'ByCustodian'), eq(length(parameters.adh_groups_list), 0)) }}:
@@ -109,7 +94,6 @@ stages:
       outDir: '$(Build.ArtifactStagingDirectory)/rg-perms'
       branchName: '$(Build.SourceBranchName)'
       poolType: ${{ parameters.poolType }}
-      selfHostedPoolName: ${{ parameters.selfHostedPoolName }}
 
   - template: stages/rg-tags.stage.yml
     parameters:
@@ -121,7 +105,6 @@ stages:
       outDir: '$(Build.ArtifactStagingDirectory)/rg-tags'
       branchName: '$(Build.SourceBranchName)'
       poolType: ${{ parameters.poolType }}
-      selfHostedPoolName: ${{ parameters.selfHostedPoolName }}
 
   - template: stages/kv-secrets.stage.yml
     parameters:
@@ -134,7 +117,6 @@ stages:
       outDir: '$(Build.ArtifactStagingDirectory)/kv-secrets'
       branchName: '$(Build.SourceBranchName)'
       poolType: ${{ parameters.poolType }}
-      selfHostedPoolName: ${{ parameters.selfHostedPoolName }}
 
   - template: stages/kv-permissions.stage.yml
     parameters:
@@ -146,7 +128,6 @@ stages:
       outDir: '$(Build.ArtifactStagingDirectory)/kv-perms'
       branchName: '$(Build.SourceBranchName)'
       poolType: ${{ parameters.poolType }}
-      selfHostedPoolName: ${{ parameters.selfHostedPoolName }}
 
   - template: stages/kv-firewall.stage.yml
     parameters:
@@ -158,7 +139,6 @@ stages:
       outDir: '$(Build.ArtifactStagingDirectory)/kv-firewall'
       branchName: '$(Build.SourceBranchName)'
       poolType: ${{ parameters.poolType }}
-      selfHostedPoolName: ${{ parameters.selfHostedPoolName }}
 
 # ----------------------- MULTI-CUSTODIAN (serial) -----------------------
 - ${{ if and(eq(parameters.run_mode, 'ByCustodian'), gt(length(parameters.adh_groups_list), 0)) }}:
@@ -168,8 +148,9 @@ stages:
       pool:
         vmImage: 'windows-latest'
     ${{ if ne(parameters.list_agent_provider, 'hosted') }}:
+      # Self-hosted: fallback to the standard pool name and route by demand
       pool:
-        name: ${{ parameters.selfHostedPoolName }}
+        name: 'Self-Hosted'
         demands:
         - custodian -equals ${{ format('{0}_{1}', variables.firstCustodian, parameters.adh_subscription_type) }}
     variables:
@@ -294,7 +275,6 @@ stages:
       outDir: '$(Build.ArtifactStagingDirectory)/rg-perms'
       branchName: '$(Build.SourceBranchName)'
       poolType: ${{ parameters.poolType }}
-      selfHostedPoolName: ${{ parameters.selfHostedPoolName }}
 
   - template: stages/rg-tags.stage.yml
     parameters:
@@ -304,7 +284,6 @@ stages:
       outDir: '$(Build.ArtifactStagingDirectory)/rg-tags'
       branchName: '$(Build.SourceBranchName)'
       poolType: ${{ parameters.poolType }}
-      selfHostedPoolName: ${{ parameters.selfHostedPoolName }}
 
   - template: stages/kv-secrets.stage.yml
     parameters:
@@ -315,7 +294,6 @@ stages:
       outDir: '$(Build.ArtifactStagingDirectory)/kv-secrets'
       branchName: '$(Build.SourceBranchName)'
       poolType: ${{ parameters.poolType }}
-      selfHostedPoolName: ${{ parameters.selfHostedPoolName }}
 
   - template: stages/kv-permissions.stage.yml
     parameters:
@@ -325,7 +303,6 @@ stages:
       outDir: '$(Build.ArtifactStagingDirectory)/kv-perms'
       branchName: '$(Build.SourceBranchName)'
       poolType: ${{ parameters.poolType }}
-      selfHostedPoolName: ${{ parameters.selfHostedPoolName }}
 
   - template: stages/kv-firewall.stage.yml
     parameters:
@@ -335,4 +312,3 @@ stages:
       outDir: '$(Build.ArtifactStagingDirectory)/kv-firewall'
       branchName: '$(Build.SourceBranchName)'
       poolType: ${{ parameters.poolType }}
-      selfHostedPoolName: ${{ parameters.selfHostedPoolName }}
