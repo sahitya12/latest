@@ -7,7 +7,6 @@ parameters:
   outDir: '$(Build.ArtifactStagingDirectory)/rg-tags'
   branchName: ''
   poolType: 'hosted'
-  selfHostedPoolName: ''
 
 stages:
 - ${{ if eq(parameters.run_mode, 'ByCustodian') }}:
@@ -29,7 +28,6 @@ stages:
         artifactName: "rg-tags"
         publishPath: "$(outDir)"
         poolType: ${{ parameters.poolType }}
-        selfHostedPoolName: ${{ parameters.selfHostedPoolName }}
         adh_group: ${{ parameters.adh_group }}
         adh_subscription_type: ${{ parameters.adh_subscription_type }}
 
@@ -51,6 +49,5 @@ stages:
         artifactName: "rg-tags-ALLADH"
         publishPath: "$(outDir)"
         poolType: ${{ parameters.poolType }}
-        selfHostedPoolName: ${{ parameters.selfHostedPoolName }}
         adh_group: ''
         adh_subscription_type: ${{ parameters.adh_subscription_type }}
