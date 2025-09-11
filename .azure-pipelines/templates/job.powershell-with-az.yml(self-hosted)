@@ -8,7 +8,6 @@ parameters:
   artifactName: ''
   publishPath: ''
   ensureAz: false
-
   # Agent control
   poolType: 'hosted'              # 'hosted' | 'self'
   selfHostedPool: 'SelfHosted-Win'
@@ -19,11 +18,9 @@ jobs:
 
   # Agent selection
   ${{ if eq(parameters.poolType, 'hosted') }}:
-    pool:
-      vmImage: 'windows-latest'
+    pool: { vmImage: 'windows-latest' }
   ${{ if ne(parameters.poolType, 'hosted') }}:
-    pool:
-      name: ${{ parameters.selfHostedPool }}
+    pool: { name: ${{ parameters.selfHostedPool }} }
 
   variables:
   - group: ${{ parameters.variableGroup }}
