@@ -1,3 +1,4 @@
+# Modernization_Terraform/sanitychecks/.azure-pipelines/templates/job.powershell-with-az.yml
 parameters:
   variableGroup: ''
   displayName: ''
@@ -10,10 +11,9 @@ parameters:
 
   # Agent control
   poolType: 'hosted'              # 'hosted' | 'self'
-  selfHostedPoolName: ''          # <-- POOL name (not agent)
-  # Demand control (when self-hosted): pass adh_group + adh_subscription_type to compute "custodian" capability
+  # Demand control (when self-hosted): use agent User capability "custodian"
   adh_group: ''
-  adh_subscription_type: ''
+  adh_subscription_type: ''       # prd | nonprd
 
 jobs:
 - job: run_powershell
@@ -24,8 +24,10 @@ jobs:
     pool:
       vmImage: 'windows-latest'
   ${{ if ne(parameters.poolType, 'hosted') }}:
+    # Fallback to the standard pool name for self-hosted agents.
+    # Change 'Self-Hosted' below if your org uses a different POOL name.
     pool:
-      name: ${{ parameters.selfHostedPoolName }}
+      name: 'Self-Hosted'
       ${{ if and(ne(parameters.adh_group, ''), ne(parameters.adh_subscription_type, '')) }}:
         demands:
         - custodian -equals ${{ format('{0}_{1}', parameters.adh_group, parameters.adh_subscription_type) }}
