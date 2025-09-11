@@ -1,7 +1,5 @@
-# Modernization_Terraform/sanitychecks/.azure-pipelines/pipeline.yml
 trigger: none
 
-# Monthly schedule (1st @ 02:00 UTC)
 schedules:
 - cron: "0 2 1 * *"
   displayName: Monthly – 1st @ 02:00 UTC
@@ -9,66 +7,78 @@ schedules:
   always: true
 
 parameters:
-# WHAT to scan
 - name: run_mode
   type: string
   default: ByCustodian
   values: [ ByCustodian, AllADH ]
 
-# Single custodian (used when adh_groups_list is empty)
 - name: adh_group
   type: string
   default: ""
 
-# Multi-custodian as a list (serial, one-by-one). Example: ["CSM","NHH","MDH"]
 - name: adh_groups_list
   type: object
   default: []
 
-# DEV / PRD / NONPRD (builds pool name: <custodian>_<adh_subscription_type>)
 - name: adh_subscription_type
   type: string
   default: DEV
   values: [ DEV, PRD, NONPRD ]
 
-# Agent provider for LIST runs:
-#   hosted     -> Azure Pipelines (windows-latest)
-#   selfhosted -> self-hosted; pool = "<firstCust>_<adh_subscription_type>"
 - name: list_agent_provider
   type: string
   default: selfhosted
   values: [ hosted, selfhosted ]
 
-# Agent provider for single-custodian & AllADH stage-templates
 - name: poolType
   type: string
   default: self
   values: [ hosted, self ]
 
-# Optional override for single-custodian pool name
 - name: overrideSelfHostedPool
   type: string
   default: ""
 
-# Shared self-hosted pool for AllADH (if poolType:self)
 - name: sharedSelfHostedPool
   type: string
   default: SanityChecks-Shared
 
-# Common inputs
 - name: prodCsvPath
   type: string
   default: '$(Build.SourcesDirectory)/sanitychecks/inputs/prod_permissions.csv'
+
 - name: nonProdCsvPath
   type: string
   default: '$(Build.SourcesDirectory)/sanitychecks/inputs/nonprod_permissions.csv'
+
 - name: kvSecretsCsvPath
   type: string
   default: '$(Build.SourcesDirectory)/sanitychecks/inputs/kvsecretsscan.csv'
 
-# -----------------------------
-# SINGLE CUSTODIAN (ByCustodian & list empty)
-# -----------------------------
+# ---------- COMPILE-TIME VARIABLES (avoid coalesce/inline indexing) ----------
+variables:
+# default
+- name: selfHostedPoolSingle
+  value: ''
+
+# prefer explicit override if provided
+- ${{ if ne(parameters.overrideSelfHostedPool, '') }}:
+  - name: selfHostedPoolSingle
+    value: ${{ parameters.overrideSelfHostedPool }}
+
+# otherwise build "<adh_group>_<adh_subscription_type>"
+- ${{ if and(eq(variables.selfHostedPoolSingle, ''), ne(parameters.adh_group, '')) }}:
+  - name: selfHostedPoolSingle
+    value: ${{ format('{0}_{1}', parameters.adh_group, parameters.adh_subscription_type) }}
+
+# compute first custodian for list runs (used to pick pool name)
+- name: firstCustodian
+  value: ''
+- ${{ if gt(length(parameters.adh_groups_list), 0) }}:
+  - name: firstCustodian
+    value: ${{ parameters.adh_groups_list[0] }}
+
+# ---------- SINGLE CUSTODIAN ----------
 - ${{ if and(eq(parameters.run_mode, 'ByCustodian'), eq(length(parameters.adh_groups_list), 0)) }}:
   - template: stages/rg-permissions.stage.yml
     parameters:
@@ -81,7 +91,7 @@ parameters:
       outDir: '$(Build.ArtifactStagingDirectory)/rg-perms'
       branchName: '$(Build.SourceBranchName)'
       poolType: ${{ parameters.poolType }}
-      selfHostedPool: ${{ coalesce(parameters.overrideSelfHostedPool, format('{0}_{1}', parameters.adh_group, parameters.adh_subscription_type)) }}
+      selfHostedPool: ${{ variables.selfHostedPoolSingle }}
 
   - template: stages/rg-tags.stage.yml
     parameters:
@@ -92,7 +102,7 @@ parameters:
       outDir: '$(Build.ArtifactStagingDirectory)/rg-tags'
       branchName: '$(Build.SourceBranchName)'
       poolType: ${{ parameters.poolType }}
-      selfHostedPool: ${{ coalesce(parameters.overrideSelfHostedPool, format('{0}_{1}', parameters.adh_group, parameters.adh_subscription_type)) }}
+      selfHostedPool: ${{ variables.selfHostedPoolSingle }}
 
   - template: stages/kv-secrets.stage.yml
     parameters:
@@ -104,7 +114,7 @@ parameters:
       outDir: '$(Build.ArtifactStagingDirectory)/kv-secrets'
       branchName: '$(Build.SourceBranchName)'
       poolType: ${{ parameters.poolType }}
-      selfHostedPool: ${{ coalesce(parameters.overrideSelfHostedPool, format('{0}_{1}', parameters.adh_group, parameters.adh_subscription_type)) }}
+      selfHostedPool: ${{ variables.selfHostedPoolSingle }}
 
   - template: stages/kv-permissions.stage.yml
     parameters:
@@ -115,7 +125,7 @@ parameters:
       outDir: '$(Build.ArtifactStagingDirectory)/kv-perms'
       branchName: '$(Build.SourceBranchName)'
       poolType: ${{ parameters.poolType }}
-      selfHostedPool: ${{ coalesce(parameters.overrideSelfHostedPool, format('{0}_{1}', parameters.adh_group, parameters.adh_subscription_type)) }}
+      selfHostedPool: ${{ variables.selfHostedPoolSingle }}
 
   - template: stages/kv-firewall.stage.yml
     parameters:
@@ -126,13 +136,9 @@ parameters:
       outDir: '$(Build.ArtifactStagingDirectory)/kv-firewall'
       branchName: '$(Build.SourceBranchName)'
       poolType: ${{ parameters.poolType }}
-      selfHostedPool: ${{ coalesce(parameters.overrideSelfHostedPool, format('{0}_{1}', parameters.adh_group, parameters.adh_subscription_type)) }}
+      selfHostedPool: ${{ variables.selfHostedPoolSingle }}
 
-# -----------------------------
-# MULTI-CUSTODIAN (serial, one-by-one)
-# - agent choice via 'list_agent_provider'
-# - if 'selfhosted': pool = "<first>_<adh_subscription_type>"
-# -----------------------------
+# ---------- MULTI-CUSTODIAN (serial) ----------
 - ${{ if and(eq(parameters.run_mode, 'ByCustodian'), gt(length(parameters.adh_groups_list), 0)) }}:
   - stage: MultiCustodian_Serial
     displayName: "Sanity checks (multi-custodian serial)"
@@ -141,7 +147,7 @@ parameters:
         vmImage: 'windows-latest'
     ${{ if ne(parameters.list_agent_provider, 'hosted') }}:
       pool:
-        name: ${{ format('{0}_{1}', parameters.adh_groups_list[0], parameters.adh_subscription_type) }}
+        name: ${{ format('{0}_{1}', variables.firstCustodian, parameters.adh_subscription_type) }}
     variables:
     - group: modernization_tfstate_backend_details
     jobs:
@@ -168,7 +174,6 @@ parameters:
               Write-Host "Prepared: $p"
             }
 
-      # Loop through custodians sequentially (call scripts directly)
       - ${{ each cust in parameters.adh_groups_list }}:
         - task: PowerShell@2
           displayName: "RG Permissions – ${{ cust }}"
@@ -248,7 +253,6 @@ parameters:
               -BranchName "$(Build.SourceBranchName)"
           pwsh: true
 
-      # Publish artifacts once at the end
       - task: PublishBuildArtifacts@1
         displayName: Publish rg-perms
         inputs: { PathtoPublish: '$(Build.ArtifactStagingDirectory)/rg-perms', ArtifactName: 'rg-perms' }
@@ -265,9 +269,7 @@ parameters:
         displayName: Publish kv-firewall
         inputs: { PathtoPublish: '$(Build.ArtifactStagingDirectory)/kv-firewall', ArtifactName: 'kv-firewall' }
 
-# -----------------------------
-# ALL ADH (shared or hosted via poolType)
-# -----------------------------
+# ---------- ALL ADH ----------
 - ${{ if eq(parameters.run_mode, 'AllADH') }}:
   - template: stages/rg-permissions.stage.yml
     parameters:
