@@ -1,3 +1,4 @@
+# Modernization_Terraform/sanitychecks/.azure-pipelines/pipeline.yml
 trigger: none
 
 # Monthly schedule (1st @ 02:00 UTC)
@@ -14,42 +15,47 @@ parameters:
   default: ByCustodian
   values: [ ByCustodian, AllADH ]
 
-# Single custodian (e.g., CSM); used when adh_groups_list is empty
+# Single custodian (used when adh_groups_list is empty)
 - name: adh_group
   type: string
   default: ""
 
-# Multi-custodian as a list (one-by-one)
-# Example to run: ["CSM","NHH","MDH"]
+# Multi-custodian as a list (serial, one-by-one). Example: ["CSM","NHH","MDH"]
 - name: adh_groups_list
   type: object
   default: []
 
-# DEV / PRD / NONPRD (influences self-hosted pool name for single custodian)
+# DEV / PRD / NONPRD (builds pool name: <custodian>_<adh_subscription_type>)
 - name: adh_subscription_type
   type: string
   default: DEV
   values: [ DEV, PRD, NONPRD ]
 
-# AGENT CHOICE
-# hosted  = Microsoft-hosted
-# self    = Self-hosted
+# Agent provider for LIST runs:
+#   hosted     -> Azure Pipelines (windows-latest)
+#   selfhosted -> self-hosted; pool = "<firstCust>_<adh_subscription_type>"
+- name: list_agent_provider
+  type: string
+  default: selfhosted
+  values: [ hosted, selfhosted ]
+
+# Agent provider for single-custodian & AllADH stage-templates
 - name: poolType
   type: string
   default: self
   values: [ hosted, self ]
 
-# Shared self-hosted pool used for multi-custodian or AllADH serial scans
-- name: sharedSelfHostedPool
-  type: string
-  default: SanityChecks-Shared
-
-# (Optional) if you really want to override the pool for single-custodian
+# Optional override for single-custodian pool name
 - name: overrideSelfHostedPool
   type: string
   default: ""
 
-# Common paths
+# Shared self-hosted pool for AllADH (if poolType:self)
+- name: sharedSelfHostedPool
+  type: string
+  default: SanityChecks-Shared
+
+# Common inputs
 - name: prodCsvPath
   type: string
   default: '$(Build.SourcesDirectory)/sanitychecks/inputs/prod_permissions.csv'
@@ -61,14 +67,14 @@ parameters:
   default: '$(Build.SourcesDirectory)/sanitychecks/inputs/kvsecretsscan.csv'
 
 # -----------------------------
-# SINGLE CUSTODIAN (ByCustodian with adh_groups_list empty)
+# SINGLE CUSTODIAN (ByCustodian & list empty)
 # -----------------------------
 - ${{ if and(eq(parameters.run_mode, 'ByCustodian'), eq(length(parameters.adh_groups_list), 0)) }}:
   - template: stages/rg-permissions.stage.yml
     parameters:
       run_mode: ByCustodian
       adh_group: ${{ parameters.adh_group }}
-      adh_groups: ''                        # not used
+      adh_groups: ''
       prodCsvPath: ${{ parameters.prodCsvPath }}
       nonProdCsvPath: ${{ parameters.nonProdCsvPath }}
       variableGroup: 'modernization_tfstate_backend_details'
@@ -123,17 +129,19 @@ parameters:
       selfHostedPool: ${{ coalesce(parameters.overrideSelfHostedPool, format('{0}_{1}', parameters.adh_group, parameters.adh_subscription_type)) }}
 
 # -----------------------------
-# MULTI-CUSTODIAN (process one-by-one in a single job on a shared pool)
+# MULTI-CUSTODIAN (serial, one-by-one)
+# - agent choice via 'list_agent_provider'
+# - if 'selfhosted': pool = "<first>_<adh_subscription_type>"
 # -----------------------------
 - ${{ if and(eq(parameters.run_mode, 'ByCustodian'), gt(length(parameters.adh_groups_list), 0)) }}:
   - stage: MultiCustodian_Serial
     displayName: "Sanity checks (multi-custodian serial)"
-    ${{ if eq(parameters.poolType, 'hosted') }}:
+    ${{ if eq(parameters.list_agent_provider, 'hosted') }}:
       pool:
         vmImage: 'windows-latest'
-    ${{ if ne(parameters.poolType, 'hosted') }}:
+    ${{ if ne(parameters.list_agent_provider, 'hosted') }}:
       pool:
-        name: ${{ parameters.sharedSelfHostedPool }}
+        name: ${{ format('{0}_{1}', parameters.adh_groups_list[0], parameters.adh_subscription_type) }}
     variables:
     - group: modernization_tfstate_backend_details
     jobs:
@@ -146,6 +154,7 @@ parameters:
         displayName: Prepare artifact folders
         inputs:
           targetType: inline
+          pwsh: true
           script: |
             $paths = @(
               "$(Build.ArtifactStagingDirectory)/rg-perms",
@@ -159,7 +168,7 @@ parameters:
               Write-Host "Prepared: $p"
             }
 
-      # Loop through the list and run each custodian sequentially
+      # Loop through custodians sequentially (call scripts directly)
       - ${{ each cust in parameters.adh_groups_list }}:
         - task: PowerShell@2
           displayName: "RG Permissions – ${{ cust }}"
@@ -257,7 +266,7 @@ parameters:
         inputs: { PathtoPublish: '$(Build.ArtifactStagingDirectory)/kv-firewall', ArtifactName: 'kv-firewall' }
 
 # -----------------------------
-# ALL ADH (shared pool)
+# ALL ADH (shared or hosted via poolType)
 # -----------------------------
 - ${{ if eq(parameters.run_mode, 'AllADH') }}:
   - template: stages/rg-permissions.stage.yml
