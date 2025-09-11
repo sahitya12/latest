@@ -1,0 +1,72 @@
+parameters:
+  variableGroup: ''
+  displayName: ''
+  scriptPath: ''
+  workingDir: ''
+  arguments: ''
+  artifactName: ''
+  publishPath: ''
+  ensureAz: false
+
+jobs:
+- job: run_powershell
+  displayName: ${{ parameters.displayName }}
+  pool:
+    vmImage: 'windows-latest'
+  variables:
+  - group: ${{ parameters.variableGroup }}
+
+  steps:
+  - checkout: self
+
+  # Optional: ensure Az modules if needed
+  # - task: PowerShell@2
+  #   displayName: Ensure Az modules
+  #   inputs:
+  #     targetType: inline
+  #     script: |
+  #       Set-PSRepository -Name 'PSGallery' -InstallationPolicy Trusted
+  #       Install-Module Az.Accounts -Force -Scope CurrentUser
+  #       Install-Module Az.Resources -Force -Scope CurrentUser
+  #       Install-Module Az.KeyVault -Force -Scope CurrentUser
+
+  - task: PowerShell@2
+    displayName: Prepare output folder
+    inputs:
+      targetType: inline
+      script: |
+        $out = "${{ parameters.publishPath }}"
+        if ([string]::IsNullOrWhiteSpace($out)) { Write-Error "publishPath parameter is empty." }
+        if (-not (Test-Path -LiteralPath $out)) {
+          New-Item -ItemType Directory -Path $out -Force | Out-Null
+        }
+        Write-Host "Prepared: $out"
+
+  - task: PowerShell@2
+    displayName: Run ${{ parameters.scriptPath }}
+    inputs:
+      targetType: filePath
+      filePath: ${{ parameters.scriptPath }}
+      workingDirectory: ${{ parameters.workingDir }}
+      arguments: ${{ parameters.arguments }}
+      pwsh: true
+
+  - task: PowerShell@2
+    displayName: List publish dir
+    inputs:
+      targetType: inline
+      script: |
+        $out = "${{ parameters.publishPath }}"
+        if (Test-Path -LiteralPath $out) {
+          Get-ChildItem -Recurse -Force $out | Format-Table -AutoSize
+        } else {
+          Write-Warning "Publish path missing: $out"
+          New-Item -ItemType Directory -Path $out -Force | Out-Null
+          Set-Content -Path (Join-Path $out 'README.txt') -Value 'No output files were produced.'
+        }
+
+  - task: PublishBuildArtifacts@1
+    displayName: Publish artifact
+    inputs:
+      PathtoPublish: ${{ parameters.publishPath }}
+      ArtifactName: ${{ parameters.artifactName }}
