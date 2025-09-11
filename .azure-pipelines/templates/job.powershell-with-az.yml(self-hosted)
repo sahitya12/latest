@@ -7,9 +7,13 @@ parameters:
   artifactName: ''
   publishPath: ''
   ensureAz: false
+
   # Agent control
   poolType: 'hosted'              # 'hosted' | 'self'
-  selfHostedPool: 'SelfHosted-Win'
+  selfHostedPoolName: ''          # <-- POOL name (not agent)
+  # Demand control (when self-hosted): pass adh_group + adh_subscription_type to compute "custodian" capability
+  adh_group: ''
+  adh_subscription_type: ''
 
 jobs:
 - job: run_powershell
@@ -21,7 +25,10 @@ jobs:
       vmImage: 'windows-latest'
   ${{ if ne(parameters.poolType, 'hosted') }}:
     pool:
-      name: ${{ parameters.selfHostedPool }}
+      name: ${{ parameters.selfHostedPoolName }}
+      ${{ if and(ne(parameters.adh_group, ''), ne(parameters.adh_subscription_type, '')) }}:
+        demands:
+        - custodian -equals ${{ format('{0}_{1}', parameters.adh_group, parameters.adh_subscription_type) }}
 
   variables:
   - group: ${{ parameters.variableGroup }}
