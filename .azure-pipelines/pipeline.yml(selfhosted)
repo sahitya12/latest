@@ -1,6 +1,5 @@
 trigger: none
 
-# Optional schedule (1st day @ 02:00 UTC on main)
 schedules:
 - cron: "0 2 1 * *"
   displayName: Monthly – 1st @ 02:00 UTC
@@ -9,7 +8,7 @@ schedules:
     - main
   always: true
 
-# ---------------- PARAMETERS (release-time variables) ----------------
+# ---------------- PARAMETERS ----------------
 parameters:
 - name: run_mode
   type: string
@@ -26,13 +25,13 @@ parameters:
   type: object
   default: []
 
-# Lowercase only
+# Lowercase only, as requested
 - name: adh_subscription_type
   type: string
   default: prd
   values: [ prd, nonprd ]
 
-# For LIST runs only: choose agent provider
+# Agent provider for LIST runs
 - name: list_agent_provider
   type: string
   default: selfhosted
@@ -44,12 +43,12 @@ parameters:
   default: self
   values: [ hosted, self ]
 
-# Optional: exact self-hosted Agent Pool name to use instead of computed <adh_group>_<adh_subscription_type>
-- name: CustomSelfHostedPool
+# Optional: the Self-hosted Agent POOL name (not agent name). Example: "SanityChecksPool"
+- name: selfHostedPoolName
   type: string
   default: ""
 
-# Paths to input CSVs (in repo)
+# Input CSVs in repo
 - name: prodCsvPath
   type: string
   default: '$(Build.SourcesDirectory)/sanitychecks/inputs/prod_permissions.csv'
@@ -60,40 +59,16 @@ parameters:
   type: string
   default: '$(Build.SourcesDirectory)/sanitychecks/inputs/kvsecretsscan.csv'
 
-# ---------------- COMPILE-TIME VARIABLES (safe computed values) ----------------
+# ---------------- COMPILE-TIME VARIABLES ----------------
 variables:
-# (A) Single-custodian self-hosted pool name
-- name: selfHostedPoolSingle
-  value: ''
-# Use CustomSelfHostedPool if provided
-- ${{ if ne(parameters.CustomSelfHostedPool, '') }}:
-  - name: selfHostedPoolSingle
-    value: ${{ parameters.CustomSelfHostedPool }}
-# Else if adh_group provided: "<adh_group>_<adh_subscription_type>"
-- ${{ if and(eq(variables.selfHostedPoolSingle, ''), ne(parameters.adh_group, '')) }}:
-  - name: selfHostedPoolSingle
-    value: ${{ format('{0}_{1}', parameters.adh_group, parameters.adh_subscription_type) }}
-
-# (B) First custodian for list runs
+# firstCustodian for list runs
 - name: firstCustodian
   value: ''
 - ${{ if gt(length(parameters.adh_groups_list), 0) }}:
   - name: firstCustodian
     value: ${{ parameters.adh_groups_list[0] }}
 
-# (C) Self-hosted pool for LIST runs
-- name: selfHostedPoolForList
-  value: ''
-# Prefer explicit custom pool if provided
-- ${{ if ne(parameters.CustomSelfHostedPool, '') }}:
-  - name: selfHostedPoolForList
-    value: ${{ parameters.CustomSelfHostedPool }}
-# Else build from first custodian
-- ${{ if and(eq(variables.selfHostedPoolForList, ''), ne(variables.firstCustodian, '')) }}:
-  - name: selfHostedPoolForList
-    value: ${{ format('{0}_{1}', variables.firstCustodian, parameters.adh_subscription_type) }}
-
-# ---------------- VALIDATION (fail-fast) ----------------
+# ---------------- VALIDATION (warn-only) ----------------
 stages:
 - stage: Validate
   displayName: Validate parameters
@@ -109,37 +84,16 @@ stages:
         Write-Host "adh_subscription_type  = '${{ parameters.adh_subscription_type }}'"
         Write-Host "poolType               = '${{ parameters.poolType }}'"
         Write-Host "list_agent_provider    = '${{ parameters.list_agent_provider }}'"
-        Write-Host "CustomSelfHostedPool   = '${{ parameters.CustomSelfHostedPool }}'"
-        Write-Host "selfHostedPoolSingle   = '$(selfHostedPoolSingle)'"
-        Write-Host "selfHostedPoolForList  = '$(selfHostedPoolForList)'"
+        Write-Host "selfHostedPoolName     = '${{ parameters.selfHostedPoolName }}'"
 
-        # If single-custodian path will use self-hosted, ensure a pool name is resolved
-        if ('${{ parameters.run_mode }}' -eq 'ByCustodian' -and ${{ length(parameters.adh_groups_list) }} -eq 0) {
-          if ('${{ parameters.poolType }}' -eq 'self') {
-            if ([string]::IsNullOrWhiteSpace('$(selfHostedPoolSingle)')) {
-              Write-Error "poolType=self but no self-hosted pool name resolved. 
-              Either set CustomSelfHostedPool OR provide adh_group (so we can build '<adh_group>_${{ parameters.adh_subscription_type }}')."
-            }
-          }
+        # Gentle warnings instead of hard-fail:
+        if ('${{ parameters.poolType }}' -eq 'self' -and [string]::IsNullOrWhiteSpace('${{ parameters.selfHostedPoolName }}')) {
+          Write-Warning "poolType=self but selfHostedPoolName is empty. You must provide a POOL name (not agent) to run on self-hosted."
         }
-
-        # If multi-list & selfhosted, ensure a pool name is resolved
-        if ('${{ parameters.run_mode }}' -eq 'ByCustodian' -and ${{ length(parameters.adh_groups_list) }} -gt 0) {
-          if ('${{ parameters.list_agent_provider }}' -eq 'selfhosted') {
-            if ([string]::IsNullOrWhiteSpace('$(selfHostedPoolForList)')) {
-              Write-Error "list_agent_provider=selfhosted but no self-hosted pool name resolved.
-              Either set CustomSelfHostedPool OR ensure adh_groups_list has at least one custodian so we can build '<firstCust>_${{ parameters.adh_subscription_type }}'."
-            }
-          }
+        if ('${{ parameters.run_mode }}' -eq 'AllADH' -and '${{ parameters.poolType }}' -eq 'self' -and [string]::IsNullOrWhiteSpace('${{ parameters.selfHostedPoolName }}')) {
+          Write-Warning "AllADH + self-hosted requires 'selfHostedPoolName' (POOL)."
         }
-
-        # If AllADH & poolType=self, require a named pool (no adh_group to build from)
-        if ('${{ parameters.run_mode }}' -eq 'AllADH' -and '${{ parameters.poolType }}' -eq 'self') {
-          if ([string]::IsNullOrWhiteSpace('${{ parameters.CustomSelfHostedPool }}')) {
-            Write-Error "AllADH with poolType=self requires CustomSelfHostedPool to be provided (exact self-hosted pool name)."
-          }
-        }
-      displayName: Fail-fast checks
+      displayName: Parameter echo & soft checks
 
 # --------------------------- SINGLE CUSTODIAN ---------------------------
 - ${{ if and(eq(parameters.run_mode, 'ByCustodian'), eq(length(parameters.adh_groups_list), 0)) }}:
@@ -148,58 +102,63 @@ stages:
       run_mode: ByCustodian
       adh_group: ${{ parameters.adh_group }}
       adh_groups: ''
+      adh_subscription_type: ${{ parameters.adh_subscription_type }}
       prodCsvPath: ${{ parameters.prodCsvPath }}
       nonProdCsvPath: ${{ parameters.nonProdCsvPath }}
       variableGroup: 'modernization_tfstate_backend_details'
       outDir: '$(Build.ArtifactStagingDirectory)/rg-perms'
       branchName: '$(Build.SourceBranchName)'
       poolType: ${{ parameters.poolType }}
-      selfHostedPool: ${{ variables.selfHostedPoolSingle }}
+      selfHostedPoolName: ${{ parameters.selfHostedPoolName }}
 
   - template: stages/rg-tags.stage.yml
     parameters:
       run_mode: ByCustodian
       adh_group: ${{ parameters.adh_group }}
       adh_groups: ''
+      adh_subscription_type: ${{ parameters.adh_subscription_type }}
       variableGroup: 'modernization_tfstate_backend_details'
       outDir: '$(Build.ArtifactStagingDirectory)/rg-tags'
       branchName: '$(Build.SourceBranchName)'
       poolType: ${{ parameters.poolType }}
-      selfHostedPool: ${{ variables.selfHostedPoolSingle }}
+      selfHostedPoolName: ${{ parameters.selfHostedPoolName }}
 
   - template: stages/kv-secrets.stage.yml
     parameters:
       run_mode: ByCustodian
       adh_group: ${{ parameters.adh_group }}
       adh_groups: ''
+      adh_subscription_type: ${{ parameters.adh_subscription_type }}
       secretsCsvPath: ${{ parameters.kvSecretsCsvPath }}
       variableGroup: 'modernization_tfstate_backend_details'
       outDir: '$(Build.ArtifactStagingDirectory)/kv-secrets'
       branchName: '$(Build.SourceBranchName)'
       poolType: ${{ parameters.poolType }}
-      selfHostedPool: ${{ variables.selfHostedPoolSingle }}
+      selfHostedPoolName: ${{ parameters.selfHostedPoolName }}
 
   - template: stages/kv-permissions.stage.yml
     parameters:
       run_mode: ByCustodian
       adh_group: ${{ parameters.adh_group }}
       adh_groups: ''
+      adh_subscription_type: ${{ parameters.adh_subscription_type }}
       variableGroup: 'modernization_tfstate_backend_details'
       outDir: '$(Build.ArtifactStagingDirectory)/kv-perms'
       branchName: '$(Build.SourceBranchName)'
       poolType: ${{ parameters.poolType }}
-      selfHostedPool: ${{ variables.selfHostedPoolSingle }}
+      selfHostedPoolName: ${{ parameters.selfHostedPoolName }}
 
   - template: stages/kv-firewall.stage.yml
     parameters:
       run_mode: ByCustodian
       adh_group: ${{ parameters.adh_group }}
       adh_groups: ''
+      adh_subscription_type: ${{ parameters.adh_subscription_type }}
       variableGroup: 'modernization_tfstate_backend_details'
       outDir: '$(Build.ArtifactStagingDirectory)/kv-firewall'
       branchName: '$(Build.SourceBranchName)'
       poolType: ${{ parameters.poolType }}
-      selfHostedPool: ${{ variables.selfHostedPoolSingle }}
+      selfHostedPoolName: ${{ parameters.selfHostedPoolName }}
 
 # ----------------------- MULTI-CUSTODIAN (serial) -----------------------
 - ${{ if and(eq(parameters.run_mode, 'ByCustodian'), gt(length(parameters.adh_groups_list), 0)) }}:
@@ -210,7 +169,9 @@ stages:
         vmImage: 'windows-latest'
     ${{ if ne(parameters.list_agent_provider, 'hosted') }}:
       pool:
-        name: ${{ variables.selfHostedPoolForList }}
+        name: ${{ parameters.selfHostedPoolName }}
+        demands:
+        - custodian -equals ${{ format('{0}_{1}', variables.firstCustodian, parameters.adh_subscription_type) }}
     variables:
     - group: modernization_tfstate_backend_details
     jobs:
@@ -326,47 +287,52 @@ stages:
   - template: stages/rg-permissions.stage.yml
     parameters:
       run_mode: AllADH
+      adh_subscription_type: ${{ parameters.adh_subscription_type }}
       prodCsvPath: ${{ parameters.prodCsvPath }}
       nonProdCsvPath: ${{ parameters.nonProdCsvPath }}
       variableGroup: 'modernization_tfstate_backend_details'
       outDir: '$(Build.ArtifactStagingDirectory)/rg-perms'
       branchName: '$(Build.SourceBranchName)'
       poolType: ${{ parameters.poolType }}
-      selfHostedPool: ${{ parameters.CustomSelfHostedPool }}
+      selfHostedPoolName: ${{ parameters.selfHostedPoolName }}
 
   - template: stages/rg-tags.stage.yml
     parameters:
       run_mode: AllADH
+      adh_subscription_type: ${{ parameters.adh_subscription_type }}
       variableGroup: 'modernization_tfstate_backend_details'
       outDir: '$(Build.ArtifactStagingDirectory)/rg-tags'
       branchName: '$(Build.SourceBranchName)'
       poolType: ${{ parameters.poolType }}
-      selfHostedPool: ${{ parameters.CustomSelfHostedPool }}
+      selfHostedPoolName: ${{ parameters.selfHostedPoolName }}
 
   - template: stages/kv-secrets.stage.yml
     parameters:
       run_mode: AllADH
+      adh_subscription_type: ${{ parameters.adh_subscription_type }}
       secretsCsvPath: ${{ parameters.kvSecretsCsvPath }}
       variableGroup: 'modernization_tfstate_backend_details'
       outDir: '$(Build.ArtifactStagingDirectory)/kv-secrets'
       branchName: '$(Build.SourceBranchName)'
       poolType: ${{ parameters.poolType }}
-      selfHostedPool: ${{ parameters.CustomSelfHostedPool }}
+      selfHostedPoolName: ${{ parameters.selfHostedPoolName }}
 
   - template: stages/kv-permissions.stage.yml
     parameters:
       run_mode: AllADH
+      adh_subscription_type: ${{ parameters.adh_subscription_type }}
       variableGroup: 'modernization_tfstate_backend_details'
       outDir: '$(Build.ArtifactStagingDirectory)/kv-perms'
       branchName: '$(Build.SourceBranchName)'
       poolType: ${{ parameters.poolType }}
-      selfHostedPool: ${{ parameters.CustomSelfHostedPool }}
+      selfHostedPoolName: ${{ parameters.selfHostedPoolName }}
 
   - template: stages/kv-firewall.stage.yml
     parameters:
       run_mode: AllADH
+      adh_subscription_type: ${{ parameters.adh_subscription_type }}
       variableGroup: 'modernization_tfstate_backend_details'
       outDir: '$(Build.ArtifactStagingDirectory)/kv-firewall'
       branchName: '$(Build.SourceBranchName)'
       poolType: ${{ parameters.poolType }}
-      selfHostedPool: ${{ parameters.CustomSelfHostedPool }}
+      selfHostedPoolName: ${{ parameters.selfHostedPoolName }}
