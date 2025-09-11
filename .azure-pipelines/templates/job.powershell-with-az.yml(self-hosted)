@@ -1,4 +1,3 @@
-# Modernization_Terraform/sanitychecks/.azure-pipelines/templates/job.powershell-with-az.yml
 parameters:
   variableGroup: ''
   displayName: ''
@@ -18,9 +17,11 @@ jobs:
 
   # Agent selection
   ${{ if eq(parameters.poolType, 'hosted') }}:
-    pool: { vmImage: 'windows-latest' }
+    pool:
+      vmImage: 'windows-latest'
   ${{ if ne(parameters.poolType, 'hosted') }}:
-    pool: { name: ${{ parameters.selfHostedPool }} }
+    pool:
+      name: ${{ parameters.selfHostedPool }}
 
   variables:
   - group: ${{ parameters.variableGroup }}
