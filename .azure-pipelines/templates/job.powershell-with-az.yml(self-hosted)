@@ -1,0 +1,309 @@
+trigger: none
+
+# Monthly schedule (1st @ 02:00 UTC)
+schedules:
+- cron: "0 2 1 * *"
+  displayName: Monthly – 1st @ 02:00 UTC
+  branches: { include: [ main ] }
+  always: true
+
+parameters:
+# WHAT to scan
+- name: run_mode
+  type: string
+  default: ByCustodian
+  values: [ ByCustodian, AllADH ]
+
+# Single custodian (e.g., CSM); used when adh_groups_list is empty
+- name: adh_group
+  type: string
+  default: ""
+
+# Multi-custodian as a list (one-by-one)
+# Example to run: ["CSM","NHH","MDH"]
+- name: adh_groups_list
+  type: object
+  default: []
+
+# DEV / PRD / NONPRD (influences self-hosted pool name for single custodian)
+- name: adh_subscription_type
+  type: string
+  default: DEV
+  values: [ DEV, PRD, NONPRD ]
+
+# AGENT CHOICE
+# hosted  = Microsoft-hosted
+# self    = Self-hosted
+- name: poolType
+  type: string
+  default: self
+  values: [ hosted, self ]
+
+# Shared self-hosted pool used for multi-custodian or AllADH serial scans
+- name: sharedSelfHostedPool
+  type: string
+  default: SanityChecks-Shared
+
+# (Optional) if you really want to override the pool for single-custodian
+- name: overrideSelfHostedPool
+  type: string
+  default: ""
+
+# Common paths
+- name: prodCsvPath
+  type: string
+  default: '$(Build.SourcesDirectory)/sanitychecks/inputs/prod_permissions.csv'
+- name: nonProdCsvPath
+  type: string
+  default: '$(Build.SourcesDirectory)/sanitychecks/inputs/nonprod_permissions.csv'
+- name: kvSecretsCsvPath
+  type: string
+  default: '$(Build.SourcesDirectory)/sanitychecks/inputs/kvsecretsscan.csv'
+
+# -----------------------------
+# SINGLE CUSTODIAN (ByCustodian with adh_groups_list empty)
+# -----------------------------
+- ${{ if and(eq(parameters.run_mode, 'ByCustodian'), eq(length(parameters.adh_groups_list), 0)) }}:
+  - template: stages/rg-permissions.stage.yml
+    parameters:
+      run_mode: ByCustodian
+      adh_group: ${{ parameters.adh_group }}
+      adh_groups: ''                        # not used
+      prodCsvPath: ${{ parameters.prodCsvPath }}
+      nonProdCsvPath: ${{ parameters.nonProdCsvPath }}
+      variableGroup: 'modernization_tfstate_backend_details'
+      outDir: '$(Build.ArtifactStagingDirectory)/rg-perms'
+      branchName: '$(Build.SourceBranchName)'
+      poolType: ${{ parameters.poolType }}
+      selfHostedPool: ${{ coalesce(parameters.overrideSelfHostedPool, format('{0}_{1}', parameters.adh_group, parameters.adh_subscription_type)) }}
+
+  - template: stages/rg-tags.stage.yml
+    parameters:
+      run_mode: ByCustodian
+      adh_group: ${{ parameters.adh_group }}
+      adh_groups: ''
+      variableGroup: 'modernization_tfstate_backend_details'
+      outDir: '$(Build.ArtifactStagingDirectory)/rg-tags'
+      branchName: '$(Build.SourceBranchName)'
+      poolType: ${{ parameters.poolType }}
+      selfHostedPool: ${{ coalesce(parameters.overrideSelfHostedPool, format('{0}_{1}', parameters.adh_group, parameters.adh_subscription_type)) }}
+
+  - template: stages/kv-secrets.stage.yml
+    parameters:
+      run_mode: ByCustodian
+      adh_group: ${{ parameters.adh_group }}
+      adh_groups: ''
+      secretsCsvPath: ${{ parameters.kvSecretsCsvPath }}
+      variableGroup: 'modernization_tfstate_backend_details'
+      outDir: '$(Build.ArtifactStagingDirectory)/kv-secrets'
+      branchName: '$(Build.SourceBranchName)'
+      poolType: ${{ parameters.poolType }}
+      selfHostedPool: ${{ coalesce(parameters.overrideSelfHostedPool, format('{0}_{1}', parameters.adh_group, parameters.adh_subscription_type)) }}
+
+  - template: stages/kv-permissions.stage.yml
+    parameters:
+      run_mode: ByCustodian
+      adh_group: ${{ parameters.adh_group }}
+      adh_groups: ''
+      variableGroup: 'modernization_tfstate_backend_details'
+      outDir: '$(Build.ArtifactStagingDirectory)/kv-perms'
+      branchName: '$(Build.SourceBranchName)'
+      poolType: ${{ parameters.poolType }}
+      selfHostedPool: ${{ coalesce(parameters.overrideSelfHostedPool, format('{0}_{1}', parameters.adh_group, parameters.adh_subscription_type)) }}
+
+  - template: stages/kv-firewall.stage.yml
+    parameters:
+      run_mode: ByCustodian
+      adh_group: ${{ parameters.adh_group }}
+      adh_groups: ''
+      variableGroup: 'modernization_tfstate_backend_details'
+      outDir: '$(Build.ArtifactStagingDirectory)/kv-firewall'
+      branchName: '$(Build.SourceBranchName)'
+      poolType: ${{ parameters.poolType }}
+      selfHostedPool: ${{ coalesce(parameters.overrideSelfHostedPool, format('{0}_{1}', parameters.adh_group, parameters.adh_subscription_type)) }}
+
+# -----------------------------
+# MULTI-CUSTODIAN (process one-by-one in a single job on a shared pool)
+# -----------------------------
+- ${{ if and(eq(parameters.run_mode, 'ByCustodian'), gt(length(parameters.adh_groups_list), 0)) }}:
+  - stage: MultiCustodian_Serial
+    displayName: "Sanity checks (multi-custodian serial)"
+    ${{ if eq(parameters.poolType, 'hosted') }}:
+      pool:
+        vmImage: 'windows-latest'
+    ${{ if ne(parameters.poolType, 'hosted') }}:
+      pool:
+        name: ${{ parameters.sharedSelfHostedPool }}
+    variables:
+    - group: modernization_tfstate_backend_details
+    jobs:
+    - job: Serial_Run
+      displayName: "Process custodians serially"
+      steps:
+      - checkout: self
+
+      - task: PowerShell@2
+        displayName: Prepare artifact folders
+        inputs:
+          targetType: inline
+          script: |
+            $paths = @(
+              "$(Build.ArtifactStagingDirectory)/rg-perms",
+              "$(Build.ArtifactStagingDirectory)/rg-tags",
+              "$(Build.ArtifactStagingDirectory)/kv-secrets",
+              "$(Build.ArtifactStagingDirectory)/kv-perms",
+              "$(Build.ArtifactStagingDirectory)/kv-firewall"
+            )
+            foreach($p in $paths){
+              if(-not (Test-Path -LiteralPath $p)){ New-Item -ItemType Directory -Path $p -Force | Out-Null }
+              Write-Host "Prepared: $p"
+            }
+
+      # Loop through the list and run each custodian sequentially
+      - ${{ each cust in parameters.adh_groups_list }}:
+        - task: PowerShell@2
+          displayName: "RG Permissions – ${{ cust }}"
+          inputs:
+            targetType: filePath
+            filePath: '$(Build.SourcesDirectory)/sanitychecks/scripts/Scan-RG-Permissions-ByCustodian.ps1'
+            workingDirectory: '$(Build.SourcesDirectory)/sanitychecks/scripts'
+            arguments: >
+              -TenantId "$(tenant_id)"
+              -ClientId "$(backend_client_id)"
+              -ClientSecret "$(backend_client_secret)"
+              -ProdCsvPath "${{ parameters.prodCsvPath }}"
+              -NonProdCsvPath "${{ parameters.nonProdCsvPath }}"
+              -adh_group "${{ cust }}"
+              -OutputDir "$(Build.ArtifactStagingDirectory)/rg-perms"
+              -BranchName "$(Build.SourceBranchName)"
+          pwsh: true
+
+        - task: PowerShell@2
+          displayName: "RG Tags – ${{ cust }}"
+          inputs:
+            targetType: filePath
+            filePath: '$(Build.SourcesDirectory)/sanitychecks/scripts/Scan-RG-Tags.ps1'
+            workingDirectory: '$(Build.SourcesDirectory)/sanitychecks/scripts'
+            arguments: >
+              -TenantId "$(tenant_id)"
+              -ClientId "$(backend_client_id)"
+              -ClientSecret "$(backend_client_secret)"
+              -adh_group "${{ cust }}"
+              -OutputDir "$(Build.ArtifactStagingDirectory)/rg-tags"
+              -BranchName "$(Build.SourceBranchName)"
+          pwsh: true
+
+        - task: PowerShell@2
+          displayName: "KV Secrets – ${{ cust }}"
+          inputs:
+            targetType: filePath
+            filePath: '$(Build.SourcesDirectory)/sanitychecks/scripts/Scan-KV-Secrets-ByCustodian.ps1'
+            workingDirectory: '$(Build.SourcesDirectory)/sanitychecks/scripts'
+            arguments: >
+              -TenantId "$(tenant_id)"
+              -ClientId "$(backend_client_id)"
+              -ClientSecret "$(backend_client_secret)"
+              -SecretCsvPath "${{ parameters.kvSecretsCsvPath }}"
+              -adh_group "${{ cust }}"
+              -OutputDir "$(Build.ArtifactStagingDirectory)/kv-secrets"
+              -BranchName "$(Build.SourceBranchName)"
+          pwsh: true
+
+        - task: PowerShell@2
+          displayName: "KV Permissions – ${{ cust }}"
+          inputs:
+            targetType: filePath
+            filePath: '$(Build.SourcesDirectory)/sanitychecks/scripts/Scan-KV-Permissions.ps1'
+            workingDirectory: '$(Build.SourcesDirectory)/sanitychecks/scripts'
+            arguments: >
+              -TenantId "$(tenant_id)"
+              -ClientId "$(backend_client_id)"
+              -ClientSecret "$(backend_client_secret)"
+              -adh_group "${{ cust }}"
+              -OutputDir "$(Build.ArtifactStagingDirectory)/kv-perms"
+              -BranchName "$(Build.SourceBranchName)"
+          pwsh: true
+
+        - task: PowerShell@2
+          displayName: "KV Firewall – ${{ cust }}"
+          inputs:
+            targetType: filePath
+            filePath: '$(Build.SourcesDirectory)/sanitychecks/scripts/Scan-KV-Networks.ps1'
+            workingDirectory: '$(Build.SourcesDirectory)/sanitychecks/scripts'
+            arguments: >
+              -TenantId "$(tenant_id)"
+              -ClientId "$(backend_client_id)"
+              -ClientSecret "$(backend_client_secret)"
+              -adh_group "${{ cust }}"
+              -OutputDir "$(Build.ArtifactStagingDirectory)/kv-firewall"
+              -BranchName "$(Build.SourceBranchName)"
+          pwsh: true
+
+      # Publish artifacts once at the end
+      - task: PublishBuildArtifacts@1
+        displayName: Publish rg-perms
+        inputs: { PathtoPublish: '$(Build.ArtifactStagingDirectory)/rg-perms', ArtifactName: 'rg-perms' }
+      - task: PublishBuildArtifacts@1
+        displayName: Publish rg-tags
+        inputs: { PathtoPublish: '$(Build.ArtifactStagingDirectory)/rg-tags', ArtifactName: 'rg-tags' }
+      - task: PublishBuildArtifacts@1
+        displayName: Publish kv-secrets
+        inputs: { PathtoPublish: '$(Build.ArtifactStagingDirectory)/kv-secrets', ArtifactName: 'kv-secrets' }
+      - task: PublishBuildArtifacts@1
+        displayName: Publish kv-perms
+        inputs: { PathtoPublish: '$(Build.ArtifactStagingDirectory)/kv-perms', ArtifactName: 'kv-perms' }
+      - task: PublishBuildArtifacts@1
+        displayName: Publish kv-firewall
+        inputs: { PathtoPublish: '$(Build.ArtifactStagingDirectory)/kv-firewall', ArtifactName: 'kv-firewall' }
+
+# -----------------------------
+# ALL ADH (shared pool)
+# -----------------------------
+- ${{ if eq(parameters.run_mode, 'AllADH') }}:
+  - template: stages/rg-permissions.stage.yml
+    parameters:
+      run_mode: AllADH
+      prodCsvPath: ${{ parameters.prodCsvPath }}
+      nonProdCsvPath: ${{ parameters.nonProdCsvPath }}
+      variableGroup: 'modernization_tfstate_backend_details'
+      outDir: '$(Build.ArtifactStagingDirectory)/rg-perms'
+      branchName: '$(Build.SourceBranchName)'
+      poolType: ${{ parameters.poolType }}
+      selfHostedPool: ${{ parameters.sharedSelfHostedPool }}
+
+  - template: stages/rg-tags.stage.yml
+    parameters:
+      run_mode: AllADH
+      variableGroup: 'modernization_tfstate_backend_details'
+      outDir: '$(Build.ArtifactStagingDirectory)/rg-tags'
+      branchName: '$(Build.SourceBranchName)'
+      poolType: ${{ parameters.poolType }}
+      selfHostedPool: ${{ parameters.sharedSelfHostedPool }}
+
+  - template: stages/kv-secrets.stage.yml
+    parameters:
+      run_mode: AllADH
+      secretsCsvPath: ${{ parameters.kvSecretsCsvPath }}
+      variableGroup: 'modernization_tfstate_backend_details'
+      outDir: '$(Build.ArtifactStagingDirectory)/kv-secrets'
+      branchName: '$(Build.SourceBranchName)'
+      poolType: ${{ parameters.poolType }}
+      selfHostedPool: ${{ parameters.sharedSelfHostedPool }}
+
+  - template: stages/kv-permissions.stage.yml
+    parameters:
+      run_mode: AllADH
+      variableGroup: 'modernization_tfstate_backend_details'
+      outDir: '$(Build.ArtifactStagingDirectory)/kv-perms'
+      branchName: '$(Build.SourceBranchName)'
+      poolType: ${{ parameters.poolType }}
+      selfHostedPool: ${{ parameters.sharedSelfHostedPool }}
+
+  - template: stages/kv-firewall.stage.yml
+    parameters:
+      run_mode: AllADH
+      variableGroup: 'modernization_tfstate_backend_details'
+      outDir: '$(Build.ArtifactStagingDirectory)/kv-firewall'
+      branchName: '$(Build.SourceBranchName)'
+      poolType: ${{ parameters.poolType }}
+      selfHostedPool: ${{ parameters.sharedSelfHostedPool }}
