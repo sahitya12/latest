@@ -1,0 +1,136 @@
+[CmdletBinding()]
+param(
+  [Parameter(Mandatory = $true)][string]$TenantId,
+  [Parameter(Mandatory = $true)][string]$ClientId,
+  [Parameter(Mandatory = $true)][string]$ClientSecret,
+
+  # Scope selection (precedence: -ScanAll > -adh_groups > -adh_group)
+  [string]$adh_group = "",
+  [string]$adh_groups = "",
+  [switch]$ScanAll,
+
+  # Output / misc
+  [string]$OutputDir = "",
+  [string]$BranchName = "",
+
+  # Optional (kept for future use; not required if you're using Power Automate)
+  [string]$TeamsWebhookUrl = ""
+)
+
+$ErrorActionPreference = 'Stop'
+
+# --- Modules & Login ---
+Import-Module Az.Accounts -ErrorAction Stop
+Import-Module Az.Resources -ErrorAction Stop
+Import-Module Az.KeyVault  -ErrorAction Stop
+
+$sec   = ConvertTo-SecureString $ClientSecret -AsPlainText -Force
+$creds = [pscredential]::new($ClientId, $sec)
+Connect-AzAccount -ServicePrincipal -Tenant $TenantId -Credential $creds | Out-Null
+
+# --- OutputDir: normalize + create (ALWAYS) ---
+if ([string]::IsNullOrWhiteSpace($OutputDir)) {
+  $OutputDir = Join-Path $PSScriptRoot '..\out\kv-firewall'
+}
+$OutputDir = [System.IO.Path]::GetFullPath($OutputDir)
+[System.IO.Directory]::CreateDirectory($OutputDir) | Out-Null
+Write-Host "KV-Networks OutputDir => $OutputDir"
+
+# --- Pick subscriptions (precedence) ---
+if ($ScanAll) {
+  $subs = Get-AzSubscription | Where-Object { $_.Name -match '(?i)ADH' }
+}
+elseif (-not [string]::IsNullOrWhiteSpace($adh_groups)) {
+  $tokens = $adh_groups -split '[,; ]+' | Where-Object { $_ } | ForEach-Object { [regex]::Escape($_.Trim()) }
+  if ($tokens.Count -gt 0) {
+    $custRegex = '(?i)ADH(' + ($tokens -join '|') + ')'
+    $subs = Get-AzSubscription | Where-Object { $_.Name -match '(?i)ADH' -and $_.Name -match $custRegex }
+  } else { $subs = @() }
+}
+elseif (-not [string]::IsNullOrWhiteSpace($adh_group)) {
+  $subs = Get-AzSubscription | Where-Object { $_.Name -match '(?i)ADH' -and $_.Name -match [regex]::Escape($adh_group) }
+}
+else {
+  Write-Warning "No filter provided (ScanAll/adh_groups/adh_group). Falling back to: any name containing 'ADH'."
+  $subs = Get-AzSubscription | Where-Object { $_.Name -match '(?i)ADH' }
+}
+Write-Host "Matched subscriptions: $($subs.Count)"
+
+# --- File paths ---
+$stamp = (Get-Date).ToString('yyyyMMdd_HHmmss')
+$csv   = Join-Path $OutputDir "kv-networks_${stamp}.csv"
+$json  = Join-Path $OutputDir "kv-networks_${stamp}.json"
+$html  = Join-Path $OutputDir "kv-networks_${stamp}.html"
+
+$rows = New-Object System.Collections.Generic.List[object]
+
+# --- Scan ---
+foreach ($sub in $subs) {
+  Write-Host "Scanning subscription: $($sub.Name)"
+  Set-AzContext -Tenant $TenantId -SubscriptionId $sub.Id | Out-Null
+
+  $vaults = @()
+  try { $vaults = Get-AzKeyVault -ErrorAction Stop } catch {
+    Write-Warning "Failed to list Key Vaults in '$($sub.Name)': $($_.Exception.Message)"; continue
+  }
+  Write-Host "  Vaults: $($vaults.Count)"
+
+  foreach ($v in $vaults) {
+    $pna  = $v.PublicNetworkAccess
+    $nacl = $v.NetworkAcls
+
+    $defaultAction = $null
+    $ipRules       = ''
+    $vnetRules     = ''
+    if ($nacl) {
+      $defaultAction = $nacl.DefaultAction
+      if ($nacl.IpRules) {
+        $ipRules = ($nacl.IpRules | ForEach-Object {
+          if ($_ -is [string]) { $_ } else { $_.IpAddressRange }
+        }) -join ';'
+      }
+      if ($nacl.VirtualNetworkRules) {
+        $vnetRules = ($nacl.VirtualNetworkRules | ForEach-Object {
+          if ($_.Id) { $_.Id }
+          elseif ($_.Subnet) { $_.Subnet.Id }
+          else { $_.ToString() }
+        }) -join ';'
+      }
+    }
+
+    $peCount = 0
+    try { if ($v.PrivateEndpointConnections) { $peCount = @($v.PrivateEndpointConnections).Count } } catch { }
+
+    $rows.Add([pscustomobject]@{
+      SubscriptionName     = $sub.Name
+      SubscriptionId       = $sub.Id
+      VaultName            = $v.VaultName
+      ResourceGroup        = $v.ResourceGroupName
+      Location             = $v.Location
+      PublicNetworkAccess  = $pna
+      DefaultAction        = $defaultAction
+      IpRules              = $ipRules
+      VirtualNetworkRules  = $vnetRules
+      PrivateEndpointCount = $peCount
+    })
+  }
+}
+
+# --- Always write outputs so Publish never fails ---
+$rows | Export-Csv $csv -NoTypeInformation -Encoding UTF8
+$rows | ConvertTo-Json -Depth 6 | Set-Content -Path $json -Encoding UTF8
+
+($rows | ConvertTo-Html -As Table -Title "KV Networks $stamp" `
+  -PreContent "<h2>KV Networks / Firewall</h2><p>Branch: $BranchName | Rows: $($rows.Count)</p>") |
+  Set-Content -Path $html -Encoding UTF8
+
+if ($rows.Count -eq 0) {
+  "No KV network/firewall data found for selected scope at $stamp" |
+    Set-Content -Path (Join-Path $OutputDir 'NO-DATA.txt') -Encoding UTF8
+}
+
+Write-Host "CSV : $csv"
+Write-Host "JSON: $json"
+Write-Host "HTML: $html"
+
+# (Teams webhook intentionally unused; notifications via Power Automate)
