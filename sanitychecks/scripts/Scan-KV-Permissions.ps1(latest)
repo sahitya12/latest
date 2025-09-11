@@ -1,0 +1,154 @@
+[CmdletBinding()]
+param(
+  [Parameter(Mandatory = $true)][string]$TenantId,
+  [Parameter(Mandatory = $true)][string]$ClientId,
+  [Parameter(Mandatory = $true)][string]$ClientSecret,
+
+  # Scope selection (precedence: -ScanAll > -adh_groups > -adh_group)
+  [string]$adh_group = "",
+  [string]$adh_groups = "",
+  [switch]$ScanAll,
+
+  # Output / misc
+  [string]$OutputDir = "",
+  [string]$BranchName = "",
+
+  # Optional (kept for future use; not required if you're using Power Automate)
+  [string]$TeamsWebhookUrl = ""
+)
+
+$ErrorActionPreference = 'Stop'
+
+# --- Modules & Login ---
+Import-Module Az.Accounts -ErrorAction Stop
+Import-Module Az.Resources -ErrorAction Stop
+Import-Module Az.KeyVault  -ErrorAction Stop
+
+$sec   = ConvertTo-SecureString $ClientSecret -AsPlainText -Force
+$creds = [pscredential]::new($ClientId, $sec)
+Connect-AzAccount -ServicePrincipal -Tenant $TenantId -Credential $creds | Out-Null
+
+# --- OutputDir: normalize + create (ALWAYS) ---
+if ([string]::IsNullOrWhiteSpace($OutputDir)) {
+  $OutputDir = Join-Path $PSScriptRoot '..\out\kv-perms'
+}
+$OutputDir = [System.IO.Path]::GetFullPath($OutputDir)
+[System.IO.Directory]::CreateDirectory($OutputDir) | Out-Null
+Write-Host "KV-Permissions OutputDir => $OutputDir"
+
+# --- Pick subscriptions (precedence: ScanAll > adh_groups > adh_group) ---
+if ($ScanAll) {
+  $subs = Get-AzSubscription | Where-Object { $_.Name -match '(?i)ADH' }
+}
+elseif (-not [string]::IsNullOrWhiteSpace($adh_groups)) {
+  $tokens = $adh_groups -split '[,; ]+' | Where-Object { $_ } | ForEach-Object { [regex]::Escape($_.Trim()) }
+  if ($tokens.Count -gt 0) {
+    $custRegex = '(?i)ADH(' + ($tokens -join '|') + ')'
+    $subs = Get-AzSubscription | Where-Object { $_.Name -match '(?i)ADH' -and $_.Name -match $custRegex }
+  } else { $subs = @() }
+}
+elseif (-not [string]::IsNullOrWhiteSpace($adh_group)) {
+  $subs = Get-AzSubscription | Where-Object { $_.Name -match '(?i)ADH' -and $_.Name -match [regex]::Escape($adh_group) }
+}
+else {
+  Write-Warning "No filter provided (ScanAll/adh_groups/adh_group). Falling back to: any name containing 'ADH'."
+  $subs = Get-AzSubscription | Where-Object { $_.Name -match '(?i)ADH' }
+}
+Write-Host "Matched subscriptions: $($subs.Count)"
+
+# --- File paths ---
+$stamp   = (Get-Date).ToString('yyyyMMdd_HHmmss')
+$rbacCsv = Join-Path $OutputDir "kv_rbac_${stamp}.csv"
+$polCsv  = Join-Path $OutputDir "kv_accesspolicies_${stamp}.csv"
+$html    = Join-Path $OutputDir "kv_permissions_${stamp}.html"
+$json    = Join-Path $OutputDir "kv_permissions_${stamp}.json"
+
+$rbac = New-Object System.Collections.Generic.List[object]
+$pol  = New-Object System.Collections.Generic.List[object]
+
+# --- Scan ---
+foreach ($sub in $subs) {
+  Write-Host "Scanning subscription: $($sub.Name)"
+  Set-AzContext -Tenant $TenantId -SubscriptionId $sub.Id | Out-Null
+
+  $vaults = @()
+  try { $vaults = Get-AzKeyVault -ErrorAction Stop } catch {
+    Write-Warning "Failed to list Key Vaults in '$($sub.Name)': $($_.Exception.Message)"; continue
+  }
+  Write-Host "  Vaults: $($vaults.Count)"
+
+  foreach ($v in $vaults) {
+    $scope = "/subscriptions/$($sub.Id)/resourceGroups/$($v.ResourceGroupName)/providers/Microsoft.KeyVault/vaults/$($v.VaultName)"
+
+    # RBAC role assignments at vault scope
+    $ra = @()
+    try { $ra = Get-AzRoleAssignment -Scope $scope -ErrorAction SilentlyContinue } catch { }
+    foreach ($a in $ra) {
+      $rbac.Add([pscustomobject]@{
+        Subscription   = $sub.Name
+        SubscriptionId = $sub.Id
+        Vault          = $v.VaultName
+        ResourceGroup  = $v.ResourceGroupName
+        Principal      = $a.DisplayName
+        PrincipalId    = $a.ObjectId
+        Role           = $a.RoleDefinitionName
+        Scope          = $a.Scope
+      })
+    }
+
+    # Access policies (legacy / if present)
+    foreach ($p in ($v.AccessPolicies | ForEach-Object { $_ })) {
+      $pol.Add([pscustomobject]@{
+        Subscription   = $sub.Name
+        SubscriptionId = $sub.Id
+        Vault          = $v.VaultName
+        ResourceGroup  = $v.ResourceGroupName
+        ObjectId       = $p.ObjectId
+        TenantId       = $p.TenantId
+        SecretsPerms   = ($p.PermissionsToSecrets       -join ',')
+        KeysPerms      = ($p.PermissionsToKeys          -join ',')
+        CertsPerms     = ($p.PermissionsToCertificates  -join ',')
+        StoragePerms   = ($p.PermissionsToStorage       -join ',')
+      })
+    }
+  }
+}
+
+# --- Always write outputs so Publish never fails ---
+$rbac | Export-Csv $rbacCsv -NoTypeInformation -Encoding UTF8
+$pol  | Export-Csv $polCsv  -NoTypeInformation -Encoding UTF8
+
+# JSON + HTML (handy in artifacts)
+@{
+  BranchName = $BranchName
+  Timestamp  = $stamp
+  RBACCount  = $rbac.Count
+  PolicyCount= $pol.Count
+  Items      = @{ RBAC = $rbac; Policies = $pol }
+} | ConvertTo-Json -Depth 8 | Set-Content -Path $json -Encoding UTF8
+
+$rbacHtml = ($rbac | ConvertTo-Html -As Table -PreContent "<h3>RBAC ($stamp)</h3>")
+$polHtml  = ($pol  | ConvertTo-Html -As Table -PreContent "<h3>Access Policies ($stamp)</h3>")
+@"
+<html>
+<head><meta charset="utf-8"><title>KV Permissions $stamp</title></head>
+<body>
+<h2>KV Permissions Inventory</h2>
+<p>Branch: $BranchName | Subs scanned: $($subs.Count)</p>
+$rbacHtml
+$polHtml
+</body>
+</html>
+"@ | Set-Content -Path $html -Encoding UTF8
+
+if (($rbac.Count + $pol.Count) -eq 0) {
+  "No KV permissions found for the selected scope at $stamp" |
+    Set-Content -Path (Join-Path $OutputDir 'NO-DATA.txt') -Encoding UTF8
+}
+
+Write-Host "RBAC CSV : $rbacCsv"
+Write-Host "Policies : $polCsv"
+Write-Host "HTML     : $html"
+Write-Host "JSON     : $json"
+
+# (Teams webhook intentionally unused; notifications via Power Automate)
