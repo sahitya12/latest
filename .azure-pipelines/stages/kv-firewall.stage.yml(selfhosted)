@@ -2,56 +2,53 @@ parameters:
   run_mode: 'ByCustodian'
   adh_group: ''
   adh_groups: ''
+  secretsCsvPath: ''
   variableGroup: 'modernization_tfstate_backend_details'
-  outDir: '$(Build.ArtifactStagingDirectory)/kv-firewall'
+  outDir: '$(Build.ArtifactStagingDirectory)/kv-secrets'
   branchName: ''
   poolType: 'hosted'
   selfHostedPool: 'SelfHosted-Win'
 
 stages:
 - ${{ if eq(parameters.run_mode, 'ByCustodian') }}:
-  - stage: KV_Firewall_ByCustodian
-    displayName: "KV Firewall (ByCustodian)"
-    variables: { outDir: ${{ parameters.outDir }} }
+  - stage: KV_Secrets_ByCustodian
+    displayName: "KV Secrets (ByCustodian)"
+    variables:
+      outDir: ${{ parameters.outDir }}
     jobs:
     - template: ../templates/job.powershell-with-az.yml
       parameters:
         variableGroup: ${{ parameters.variableGroup }}
-        displayName: 'KV Firewall Scan (ByCustodian)'
-        scriptPath: 'sanitychecks/scripts/Scan-KV-Networks.ps1'
+        displayName: 'KV Secrets Scan (ByCustodian)'
+        scriptPath: 'sanitychecks/scripts/Scan-KV-Secrets-ByCustodian.ps1'
         workingDir: '$(Build.SourcesDirectory)/sanitychecks/scripts'
         arguments: >
-          -TenantId "$(tenant_id)"
-          -ClientId "$(backend_client_id)"
-          -ClientSecret "$(backend_client_secret)"
-          -adh_group "${{ parameters.adh_group }}"
-          -adh_groups "${{ parameters.adh_groups }}"
-          -OutputDir "$(outDir)"
-          -BranchName "${{ parameters.branchName }}"
-        artifactName: "kv-firewall"
+          -TenantId "$(tenant_id)" -ClientId "$(backend_client_id)" -ClientSecret "$(backend_client_secret)"
+          -SecretCsvPath "${{ parameters.secretsCsvPath }}"
+          -adh_group "${{ parameters.adh_group }}" -adh_groups "${{ parameters.adh_groups }}"
+          -OutputDir "$(outDir)" -BranchName "${{ parameters.branchName }}"
+        artifactName: "kv-secrets"
         publishPath: "$(outDir)"
         poolType: ${{ parameters.poolType }}
         selfHostedPool: ${{ parameters.selfHostedPool }}
 
 - ${{ if ne(parameters.run_mode, 'ByCustodian') }}:
-  - stage: KV_Firewall_AllADH
-    displayName: "KV Firewall (All ADH)"
-    variables: { outDir: ${{ parameters.outDir }} }
+  - stage: KV_Secrets_AllADH
+    displayName: "KV Secrets (All ADH)"
+    variables:
+      outDir: ${{ parameters.outDir }}
     jobs:
     - template: ../templates/job.powershell-with-az.yml
       parameters:
         variableGroup: ${{ parameters.variableGroup }}
-        displayName: 'KV Firewall Scan (AllADH)'
-        scriptPath: 'sanitychecks/scripts/Scan-KV-Networks.ps1'
+        displayName: 'KV Secrets Scan (AllADH)'
+        scriptPath: 'sanitychecks/scripts/Scan-KV-Secrets-AllADH.ps1'
         workingDir: '$(Build.SourcesDirectory)/sanitychecks/scripts'
         arguments: >
-          -TenantId "$(tenant_id)"
-          -ClientId "$(backend_client_id)"
-          -ClientSecret "$(backend_client_secret)"
-          -ScanAll
-          -OutputDir "$(outDir)"
-          -BranchName "${{ parameters.branchName }}"
-        artifactName: "kv-firewall-ALLADH"
+          -TenantId "$(tenant_id)" -ClientId "$(backend_client_id)" -ClientSecret "$(backend_client_secret)"
+          -SecretCsvPath "${{ parameters.secretsCsvPath }}"
+          -OutputDir "$(outDir)" -BranchName "${{ parameters.branchName }}"
+        artifactName: "kv-secrets-ALLADH"
         publishPath: "$(outDir)"
         poolType: ${{ parameters.poolType }}
         selfHostedPool: ${{ parameters.selfHostedPool }}
