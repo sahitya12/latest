@@ -12,7 +12,8 @@ stages:
 - ${{ if eq(parameters.run_mode, 'ByCustodian') }}:
   - stage: RG_Tags_ByCustodian
     displayName: "RG Tags (ByCustodian)"
-    variables: { outDir: ${{ parameters.outDir }} }
+    variables:
+      outDir: ${{ parameters.outDir }}
     jobs:
     - template: ../templates/job.powershell-with-az.yml
       parameters:
@@ -21,13 +22,9 @@ stages:
         scriptPath: 'sanitychecks/scripts/Scan-RG-Tags.ps1'
         workingDir: '$(Build.SourcesDirectory)/sanitychecks/scripts'
         arguments: >
-          -TenantId "$(tenant_id)"
-          -ClientId "$(backend_client_id)"
-          -ClientSecret "$(backend_client_secret)"
-          -adh_group "${{ parameters.adh_group }}"
-          -adh_groups "${{ parameters.adh_groups }}"
-          -OutputDir "$(outDir)"
-          -BranchName "${{ parameters.branchName }}"
+          -TenantId "$(tenant_id)" -ClientId "$(backend_client_id)" -ClientSecret "$(backend_client_secret)"
+          -adh_group "${{ parameters.adh_group }}" -adh_groups "${{ parameters.adh_groups }}"
+          -OutputDir "$(outDir)" -BranchName "${{ parameters.branchName }}"
         artifactName: "rg-tags"
         publishPath: "$(outDir)"
         poolType: ${{ parameters.poolType }}
@@ -36,7 +33,8 @@ stages:
 - ${{ if ne(parameters.run_mode, 'ByCustodian') }}:
   - stage: RG_Tags_AllADH
     displayName: "RG Tags (All ADH)"
-    variables: { outDir: ${{ parameters.outDir }} }
+    variables:
+      outDir: ${{ parameters.outDir }}
     jobs:
     - template: ../templates/job.powershell-with-az.yml
       parameters:
@@ -45,12 +43,8 @@ stages:
         scriptPath: 'sanitychecks/scripts/Scan-RG-Tags.ps1'
         workingDir: '$(Build.SourcesDirectory)/sanitychecks/scripts'
         arguments: >
-          -TenantId "$(tenant_id)"
-          -ClientId "$(backend_client_id)"
-          -ClientSecret "$(backend_client_secret)"
-          -ScanAll
-          -OutputDir "$(outDir)"
-          -BranchName "${{ parameters.branchName }}"
+          -TenantId "$(tenant_id)" -ClientId "$(backend_client_id)" -ClientSecret "$(backend_client_secret)"
+          -ScanAll -OutputDir "$(outDir)" -BranchName "${{ parameters.branchName }}"
         artifactName: "rg-tags-ALLADH"
         publishPath: "$(outDir)"
         poolType: ${{ parameters.poolType }}
