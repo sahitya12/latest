@@ -1,0 +1,30 @@
+# --- SPN login (vars from moderanization_tfstate_backend_details) ---
+$clientId     = (Get-Item Env:backend_client_id     -ErrorAction SilentlyContinue).Value
+$clientSecret = (Get-Item Env:backend_client_secret -ErrorAction SilentlyContinue).Value
+$tenantId     = (Get-Item Env:tenant_id             -ErrorAction SilentlyContinue).Value
+if ([string]::IsNullOrWhiteSpace($clientId) -or [string]::IsNullOrWhiteSpace($clientSecret) -or [string]::IsNullOrWhiteSpace($tenantId)) {
+  throw "Missing backend_client_id / backend_client_secret / tenant_id (check variable group 'moderanization_tfstate_backend_details')."
+}
+
+Write-Host "Logging into Azure with service principal (tenant: $tenantId)..."
+az logout | Out-Null
+$null = az login --service-principal -u $clientId -p $clientSecret --tenant $tenantId
+if ($LASTEXITCODE -ne 0) { throw "az login failed." }
+
+# --- Resolve subscription ID from mapping key ---
+$adhGroup   = "$(adh_group)"
+$adhSubType = "$(adh_subscription_type)"   # 'nonprd' or 'prd'
+if ([string]::IsNullOrWhiteSpace($adhGroup) -or [string]::IsNullOrWhiteSpace($adhSubType)) {
+  throw "adh_group or adh_subscription_type is empty."
+}
+
+# Key pattern: <adh_group>_<adh_subscription_type>_subscription_id
+$key = "{0}_{1}_subscription_id" -f $adhGroup, $adhSubType
+Write-Host "Looking up subscription id with key: $key (from linked variable group[s])"
+
+# Variable groups expose keys as environment variables
+$subId = (Get-Item -Path "Env:$key" -ErrorAction SilentlyContinue).Value
+if (-not $subId) { throw "No subscription ID found for '$key'. Check your variable group(s)." }
+
+Write-Host "Resolved subscription: $subId"
+Write-Host "##vso[task.setvariable variable=TargetSubId]$subId"
